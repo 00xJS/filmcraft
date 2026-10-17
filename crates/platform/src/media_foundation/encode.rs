@@ -57,10 +57,8 @@ struct Config {
     size: (u32, u32),
     rate: (u32, u32),
     bitrate_bps: u32,
-    /// Constant bit rate (Export ▸ Bitrate Encoding ▸ CBR); otherwise VBR, peak-limited by `max_bitrate_bps`.
+    /// Constant bit rate (Export ▸ Bitrate Encoding ▸ CBR); otherwise VBR.
     cbr: bool,
-    /// The VBR peak in bits per second: the export's Maximum Bitrate, or 1.5x the target (as NVENC).
-    max_bitrate_bps: u32,
     codec: NalCodec,
     /// The output media subtype (`MFVideoFormat_H264` / `MFVideoFormat_HEVC`).
     subtype: windows::core::GUID,
@@ -112,10 +110,6 @@ fn config(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -
         // bits per second; encoders refuse a type without a bit rate
         bitrate_bps: s.bitrate_kbps.max(100).saturating_mul(1000),
         cbr: s.bitrate_mode == BitrateMode::Cbr,
-        max_bitrate_bps: {
-            let kbps = s.bitrate_kbps.max(100);
-            s.max_bitrate_kbps.filter(|m| *m >= kbps).unwrap_or_else(|| kbps.saturating_add(kbps / 2)).saturating_mul(1000)
-        },
         codec: if hevc { NalCodec::Hevc } else { NalCodec::H264 },
         subtype: if hevc { MFVideoFormat_HEVC } else { MFVideoFormat_H264 },
         // H.264 only. HEVC's `MF_MT_MPEG2_PROFILE` values are `eAVEncH265VProfile_*`, and every
@@ -160,7 +154,6 @@ pub fn factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettin
         rate: cfg.rate,
         bitrate: cfg.bitrate_bps,
         cbr: cfg.cbr,
-        max_bitrate: cfg.max_bitrate_bps,
     };
     let mft = match super::open(api, &spec) {
         Ok(m) => m,
@@ -432,7 +425,6 @@ pub fn h264_available() -> bool {
             rate: (30, 1),
             bitrate: 2_000_000,
             cbr: false,
-            max_bitrate: 3_000_000,
         };
         match super::open(api, &spec) {
             Ok(_) => true,
@@ -451,16 +443,7 @@ pub fn hevc_available() -> bool {
     *HEVC_PROBE.get_or_init(|| {
         let Ok(api) = super::mft::api() else { return false };
         use windows::Win32::Media::MediaFoundation::MFVideoFormat_HEVC;
-        let spec = EncSpec {
-            subtype: MFVideoFormat_HEVC,
-            profile: None,
-            label: "H.265",
-            size: (640, 360),
-            rate: (30, 1),
-            bitrate: 2_000_000,
-            cbr: false,
-            max_bitrate: 3_000_000,
-        };
+        let spec = EncSpec { subtype: MFVideoFormat_HEVC, profile: None, label: "H.265", size: (640, 360), rate: (30, 1), bitrate: 2_000_000, cbr: false };
         match super::open(api, &spec) {
             Ok(_) => true,
             Err(why) => {
@@ -500,20 +483,12 @@ mod tests {
         ExportSettings { format, hardware_encoding: HardwareEncoding::Auto, bitrate_kbps: 4000, ..Default::default() }
     }
 
-    /// The export's bitrate mode and Maximum Bitrate reach the encoder as its rate control (#936):
-    /// CBR for CBR, otherwise VBR peaking at the maximum, or 1.5x the target without one (as NVENC).
+    /// The export's bitrate mode reaches the encoder as its rate control mode (#936).
     #[test]
     fn rate_control_follows_the_export_settings() {
-        let vbr = config(Format::H264, 1280, 720, FrameRate::FPS_24, &settings(Format::H264)).unwrap();
-        assert!(!vbr.cbr);
-        assert_eq!(vbr.max_bitrate_bps, 6_000_000);
-        let cbr = config(Format::H264, 1280, 720, FrameRate::FPS_24, &ExportSettings { bitrate_mode: BitrateMode::Cbr, ..settings(Format::H264) }).unwrap();
-        assert!(cbr.cbr);
-        let capped = ExportSettings { max_bitrate_kbps: Some(5000), ..settings(Format::H264) };
-        assert_eq!(config(Format::H264, 1280, 720, FrameRate::FPS_24, &capped).unwrap().max_bitrate_bps, 5_000_000);
-        // a maximum below the target is not a peak: the default applies
-        let low = ExportSettings { max_bitrate_kbps: Some(1000), ..settings(Format::H264) };
-        assert_eq!(config(Format::H264, 1280, 720, FrameRate::FPS_24, &low).unwrap().max_bitrate_bps, 6_000_000);
+        assert!(!config(Format::H264, 1280, 720, FrameRate::FPS_24, &settings(Format::H264)).unwrap().cbr);
+        let cbr = ExportSettings { bitrate_mode: BitrateMode::Cbr, ..settings(Format::H264) };
+        assert!(config(Format::H264, 1280, 720, FrameRate::FPS_24, &cbr).unwrap().cbr);
     }
 
     #[test]

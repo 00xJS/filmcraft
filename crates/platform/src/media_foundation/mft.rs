@@ -15,14 +15,14 @@ use std::sync::OnceLock;
 use windows::Win32::Foundation::{E_UNEXPECTED, HMODULE};
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncCommonMaxBitRate, CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode, ICodecAPI, IMFActivate, IMFDXGIDeviceManager,
-    IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NO_MORE_TYPES, MF_E_NOTACCEPTING, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MINIMUM_DISPLAY_APERTURE, MF_MT_MPEG2_PROFILE,
-    MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION, MFMediaType_Video, MFT_CATEGORY_VIDEO_DECODER,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
-    MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO,
-    MFVideoFormat_NV12, MFVideoFormat_P010, MFVideoInterlace_Progressive, eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_PeakConstrainedVBR,
+    CODECAPI_AVEncCommonRateControlMode, ICodecAPI, IMFActivate, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
+    MF_E_NO_MORE_TYPES, MF_E_NOTACCEPTING, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MINIMUM_DISPLAY_APERTURE, MF_MT_MPEG2_PROFILE, MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC,
+    MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION, MFMediaType_Video, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_FRIENDLY_NAME_Attribute, MFT_MESSAGE_COMMAND_DRAIN,
+    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_REGISTER_TYPE_INFO, MFVideoFormat_NV12, MFVideoFormat_P010,
+    MFVideoInterlace_Progressive, eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_PeakConstrainedVBR,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
@@ -103,6 +103,12 @@ pub enum Input {
     Full,
 }
 
+/// Whether an encoder MFT is one of AMD's (`AMDh264Encoder`, `AMDh265Encoder`, ...), by its
+/// friendly name; the vendor's own prefix, so a driver rename to "AMD ..." still matches.
+fn amd_encoder(friendly_name: &str) -> bool {
+    friendly_name.trim_start().get(..3).is_some_and(|p| p.eq_ignore_ascii_case("amd"))
+}
+
 /// A `VT_UI4` VARIANT holding `value`, for `ICodecAPI::SetValue`.
 fn variant_u32(value: u32) -> VARIANT {
     let mut var = VARIANT::default();
@@ -126,10 +132,8 @@ pub struct EncSpec {
     pub rate: (u32, u32),
     /// Average bit rate in bits per second (never zero: encoders refuse a type without one).
     pub bitrate: u32,
-    /// Constant bit rate; otherwise variable, peaking at `max_bitrate`.
+    /// Constant bit rate (Export ▸ Bitrate Encoding ▸ CBR); otherwise variable.
     pub cbr: bool,
-    /// The VBR peak in bits per second (at least `bitrate`).
-    pub max_bitrate: u32,
 }
 
 /// A hardware encoder MFT, configured for one stream.
@@ -188,23 +192,20 @@ impl MfEncoder {
                 unsafe { attributes.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1) }.map_err(|e| format!("{name}: refuses to be unlocked: {e}"))?;
             }
         }
-        // The rate control, said explicitly through the codec API: left to its default mode, AMD's
-        // H.264 MFT delivers about twice MF_MT_AVG_BITRATE (its HEVC one lands on it); told the
-        // mode and the mean rate it holds the target. Encoders without the codec API, or without a
-        // property, keep their defaults (the debug log says which).
-        if let Ok(codec) = transform.cast::<ICodecAPI>() {
+        // AMD's H.264 MFT does not take its rate control from the output type: left to its
+        // default mode it delivers about twice MF_MT_AVG_BITRATE (its HEVC one lands on it), and
+        // told the mode through the codec API it holds the target; the mean and peak rates alone
+        // change nothing there. Only AMD's encoders are told, because Qualcomm's stamps pictures
+        // with the times of an earlier session once its mode is set (the export is then refused
+        // as reordering), and the others hold the target as they are.
+        if amd_encoder(&name)
+            && let Ok(codec) = transform.cast::<ICodecAPI>()
+        {
             let mode = if spec.cbr { eAVEncCommonRateControlMode_CBR } else { eAVEncCommonRateControlMode_PeakConstrainedVBR };
-            let props = [
-                ("rate control mode", &CODECAPI_AVEncCommonRateControlMode, mode.0 as u32),
-                ("mean bit rate", &CODECAPI_AVEncCommonMeanBitRate, spec.bitrate.max(1)),
-                ("peak bit rate", &CODECAPI_AVEncCommonMaxBitRate, spec.max_bitrate.max(spec.bitrate.max(1))),
-            ];
-            for (what, api_id, value) in props.into_iter().take(if spec.cbr { 2 } else { 3 }) {
-                let var = variant_u32(value);
-                // SAFETY: a plain COM call; `var` is a fully initialised VT_UI4 VARIANT that outlives it.
-                if let Err(e) = unsafe { codec.SetValue(api_id, &var) } {
-                    log::debug!("{name}: {what} not set: {e}");
-                }
+            let var = variant_u32(mode.0 as u32);
+            // SAFETY: a plain COM call; `var` is a fully initialised VT_UI4 VARIANT that outlives it.
+            if let Err(e) = unsafe { codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &var) } {
+                log::debug!("{name}: rate control mode not set: {e}");
             }
         }
         // Output type first: an encoder will not accept an input type before it has one.
@@ -855,6 +856,23 @@ mod tests {
     const STEP: Duration = Duration::from_millis(5);
     const IDLE: Duration = Duration::from_millis(30);
     const BUDGET: Duration = Duration::from_millis(100);
+
+    /// Only AMD's encoders are told their rate control mode (#936).
+    #[test]
+    fn only_amd_encoders_are_told_their_rate_control() {
+        for (name, amd) in [
+            ("AMDh264Encoder", true),
+            ("AMDh265Encoder", true),
+            ("AMD AV1 Encoder", true),
+            ("NVIDIA H.264 Encoder MFT", false),
+            ("Intel® Hardware H264 Encoder MFT", false),
+            ("QCOM H264 Encoder MFT", false),
+            ("", false),
+            ("am", false),
+        ] {
+            assert_eq!(amd_encoder(name), amd, "{name}");
+        }
+    }
 
     /// An asynchronous encoder says "not yet" before it has anything. The wait must keep asking
     /// rather than stopping at the first silence, or a picture that arrives a moment later is lost.
