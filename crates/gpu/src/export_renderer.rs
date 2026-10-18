@@ -77,11 +77,37 @@ pub mod timing {
 /// renderer and lives in a `OnceLock`, so it is not recreated in this process.
 static DEVICE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Retire the shared export device, logging the first reason only.
+/// Retire the shared export device, logging the first reason only and keeping it for
+/// [`disabled_reason`].
 fn mark_device_failed(why: &str) {
     if !DEVICE_FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         log::error!("GPU export disabled for this session ({why}); exports render on the CPU");
+        keep_reason(why);
     }
+}
+
+fn disabled_reason_slot() -> &'static std::sync::Mutex<Option<String>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// The first reason only; bounded, since a driver's message is not ours to repeat in full.
+fn keep_reason(why: &str) {
+    let mut slot = disabled_reason_slot().lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        let mut kept: String = why.chars().take(500).collect();
+        if why.chars().count() > 500 {
+            kept.push('…');
+        }
+        *slot = Some(kept);
+    }
+}
+
+/// Why this process's export renderer is off, once it is: no adapter or device could be had, or
+/// the device failed (#1616). `None` while it works or before it was asked for. The app's frame
+/// renderer factory passes this on to the export crate, where `perf.stats` shows it.
+pub fn disabled_reason() -> Option<String> {
+    disabled_reason_slot().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 fn device_failed() -> bool {
@@ -112,8 +138,20 @@ impl ExportRenderer {
                     return None;
                 }
                 let instance = wgpu::Instance::default();
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-                let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+                let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        keep_reason(&format!("no graphics adapter: {e}"));
+                        return None;
+                    }
+                };
+                let (device, queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) {
+                    Ok(dq) => dq,
+                    Err(e) => {
+                        keep_reason(&format!("no graphics device: {e}"));
+                        return None;
+                    }
+                };
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
                 // send the remaining frames to the CPU instead.
                 device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| mark_device_failed(&format!("GPU error: {e}"))));

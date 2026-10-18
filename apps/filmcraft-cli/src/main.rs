@@ -240,7 +240,14 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
 
 fn register_gpu_frame_renderer() {
     filmcraft_export::register_frame_renderer(|| {
-        filmcraft_gpu::ExportRenderer::new().map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
+        let renderer = filmcraft_gpu::ExportRenderer::new().map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>);
+        // no renderer: say why, so `perf.stats` can (#1616)
+        if renderer.is_none()
+            && let Some(why) = filmcraft_gpu::export_renderer::disabled_reason()
+        {
+            filmcraft_export::note_gpu_render_disabled(&why);
+        }
+        renderer
     });
 }
 
