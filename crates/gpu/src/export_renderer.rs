@@ -135,6 +135,7 @@ impl ExportRenderer {
                 // alone: this crate asks for none) has no GPU to offer, and `Instance::default()`
                 // panics there.
                 if wgpu::Instance::enabled_backend_features().is_empty() {
+                    keep_reason("this build has no wgpu backend (filmcraft-cli built on its own); exports render on the CPU");
                     return None;
                 }
                 let instance = wgpu::Instance::default();
