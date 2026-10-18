@@ -400,7 +400,15 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
         opts: filmcraft_render::RenderOptions,
         sources: &dyn filmcraft_render::SourceProvider,
     ) -> Option<filmcraft_render::Image> {
-        self.0.render(project, seq, t, opts, sources)
+        let image = self.0.render(project, seq, t, opts, sources);
+        // a device that failed mid-export: say why, so `perf.stats` can (#1616); a frame the GPU
+        // declines for its own reasons leaves no reason behind and says nothing
+        if image.is_none()
+            && let Some(why) = filmcraft_gpu::export_renderer::disabled_reason()
+        {
+            filmcraft_export::note_gpu_render_disabled(&why);
+        }
+        image
     }
 }
 
