@@ -28,21 +28,32 @@ fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-/// `path` with ` (2)`, ` (3)`, … before its extension until no file is there (bounded; the last
-/// candidate is returned if all are taken, which `write_file` then reports).
-fn free_path(services: &dyn crate::Services, path: &str) -> String {
+/// Where embedded audio goes when `path` is taken by a different file: the first `name (n).ext`
+/// (n from 2) that is free, or that already holds exactly `bytes` (a re-import after a collision
+/// reuses its earlier copy, `Reuse`, and writes nothing). A thousand taken names is an error: the
+/// write that would follow replaces whatever is at the last candidate, so it must not happen.
+fn free_path(services: &dyn crate::Services, path: &str, bytes: &[u8]) -> Result<(String, Reuse)> {
     let p = std::path::Path::new(path);
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
     let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-    let mut candidate = path.to_string();
     for n in 2..1000u32 {
-        candidate = dir.join(format!("{stem} ({n}){ext}")).to_string_lossy().into_owned();
+        let candidate = dir.join(format!("{stem} ({n}){ext}")).to_string_lossy().into_owned();
         if services.file_size(&candidate).is_err() {
-            break;
+            return Ok((candidate, Reuse::No));
+        }
+        if services.read_file(&candidate).is_ok_and(|have| have == bytes) {
+            return Ok((candidate, Reuse::Yes));
         }
     }
-    candidate
+    Err(EngineError::Other(format!("{}: a thousand files named like it are already there", file_name(path))))
+}
+
+/// Whether [`free_path`] found an earlier copy of the same audio.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reuse {
+    No,
+    Yes,
 }
 
 /// Import a document: merge its bins, media and sequences into the project (one undo step), then
@@ -67,11 +78,15 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
                     if s.services.read_file(&m.path).is_ok_and(|have| have == m.wav) {
                         continue;
                     }
-                    let free = free_path(&*s.services, &m.path);
-                    report.info(format!("{} exists and differs: embedded audio written as {}", file_name(&m.path), file_name(&free)));
+                    let (free, reuse) = free_path(&*s.services, &m.path, &m.wav)?;
                     if let Some(ItemKind::Media(media)) = fragment.project.item_mut(m.item).map(|i| &mut i.kind) {
                         media.media = MediaRef::File { path: free.clone() };
                     }
+                    if reuse == Reuse::Yes {
+                        // the copy an earlier import wrote beside the other file: nothing to write or say
+                        continue;
+                    }
+                    report.info(format!("{} exists and differs: embedded audio written as {}", file_name(&m.path), file_name(&free)));
                     m.path = free;
                 }
                 if let Some(dir) = std::path::Path::new(&m.path).parent().filter(|_| !s.services.export_in_memory()) {

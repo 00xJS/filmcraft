@@ -123,6 +123,15 @@ fn aaf_import_never_overwrites_an_existing_file() {
     assert_eq!(std::fs::read(&moved).unwrap(), bytes[0], "the audio went beside it");
     assert!(!s.project.item(third.audio_tracks[0].items[0].item).unwrap().as_media().unwrap().offline);
     assert!(r.to_string().contains("exists and differs"), "the report says so: {r}");
+    // a fourth import, the collision still there: the earlier " (2)" copy is reused, not a " (3)"
+    let stamp = std::fs::metadata(&moved).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let r = s.execute("file.import", json!({"paths": [path]})).unwrap();
+    let fourth = s.project.sequence(imported_seq(&r)).unwrap().clone();
+    assert_eq!(path_of(&s, fourth.audio_tracks[0].items[0].item), moved, "the same \" (2)\" file again");
+    assert_eq!(std::fs::metadata(&moved).unwrap().modified().unwrap(), stamp, "and it was not rewritten");
+    assert!(!std::path::Path::new(&moved.replace(" (2).wav", " (3).wav")).exists(), "no \" (3)\" copy appears");
+    assert!(!r.to_string().contains("written as"), "nothing new to report: {r}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
