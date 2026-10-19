@@ -91,15 +91,11 @@ fn disabled_reason_slot() -> &'static std::sync::Mutex<Option<String>> {
     R.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-/// The first reason only; bounded, since a driver's message is not ours to repeat in full.
+/// The first reason only, as the driver gave it; the export crate bounds it when it takes it.
 fn keep_reason(why: &str) {
     let mut slot = disabled_reason_slot().lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_none() {
-        let mut kept: String = why.chars().take(500).collect();
-        if why.chars().count() > 500 {
-            kept.push('…');
-        }
-        *slot = Some(kept);
+        *slot = Some(why.to_string());
     }
 }
 
