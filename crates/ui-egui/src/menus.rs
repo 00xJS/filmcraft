@@ -305,9 +305,10 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         }
         return r;
     }
-    // The dialog routes answer only the menu (#1540): from `engine.execute` the command goes on to
-    // the engine with the parameters given, and answers an error when it needs some.
-    if menu && let Some(r) = crate::panels::menu_dialogs::route(app, ctx, id, &params) {
+    // The dialogs answer only the menu (#1540): from `engine.execute` the command goes on to the
+    // engine with the parameters given, and answers an error when it needs some. The UI commands
+    // the menu-dialog route also carries (dynamic waveforms, reveal, …) answer either way.
+    if let Some(r) = crate::panels::menu_dialogs::route(app, ctx, id, &params, menu) {
         if let Err(e) = &r {
             app.ui.status = e.clone();
         }

@@ -167,7 +167,10 @@ pub fn system_report(app: &FilmcraftApp) -> Value {
 }
 
 /// Menu / shortcut entry points. Returns None for ids this module doesn't handle.
-pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+/// `dialogs`: whether a command sent without parameters may open its dialog (a menu, a shortcut,
+/// `ui.menu.invoke`); from `engine.execute` it may not (#1540), and the command goes on to the
+/// engine instead. The UI commands above the dialogs answer either way.
+pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Value, dialogs: bool) -> Option<Result<Value, String>> {
     let empty = params.as_object().is_none_or(|m| m.is_empty());
     // UI commands
     match id {
@@ -244,7 +247,7 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
         }
         _ => {}
     }
-    if !empty {
+    if !empty || !dialogs {
         return None;
     }
     let cmd = dialog_command(id)?;

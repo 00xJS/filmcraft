@@ -680,4 +680,8 @@ fn engine_execute_leaves_the_ui_alone_for_every_dialog_command() {
     // the menu form of one of them still opens its dialog
     let r = d.ok("ui.menu.invoke", json!({"id": "edit.find"}));
     assert_eq!(r["dialog"], json!("find"), "{r}");
+    // the UI commands the same route carries still answer `engine.execute`
+    let r = d.exec("view.dynamicAudioWaveforms", json!({"on": false}));
+    assert_eq!(r["dynamicAudioWaveforms"], json!(false), "{r}");
+    assert_eq!(d.inspect()["ui"]["extras"]["dynamic_waveforms"], json!(false));
 }
