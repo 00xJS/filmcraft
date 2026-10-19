@@ -71,11 +71,19 @@ pub(crate) fn edit_many(s: &mut Session, p: &Value, command: &str, interp: Optio
     }
     let label = if interp.is_some() { "Keyframe Interpolation" } else { "Delete Keyframes" };
     s.edit_sequence(label, |sequence, _, _| {
-        for (lane, times) in lanes {
+        for (lane, mut times) in lanes {
             let param = param_mut(sequence, &lane)?;
             match interp {
                 Some(kind) => param.keyframes.iter_mut().filter(|k| times.contains(&k.time)).for_each(|k| k.interp = kind),
-                None => param.keyframes.retain(|k| !times.contains(&k.time)),
+                None => {
+                    // one at a time, earliest first, exactly as single deletes would go: when the
+                    // last keyframe of a parameter goes, the parameter keeps that keyframe's value
+                    // (`remove_keyframe_at`), so a lane cleared whole ends at its latest keyframe
+                    times.sort_unstable();
+                    for t in times {
+                        param.remove_keyframe_at(t);
+                    }
+                }
             }
         }
         Ok(())
@@ -155,6 +163,7 @@ pub(crate) fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use filmcraft_project::ParamValue;
     use std::sync::Arc;
 
     fn fixture() -> (Session, Vec<Value>) {
@@ -212,6 +221,39 @@ mod tests {
         assert_eq!(s.history.undo.len(), undo + 1);
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.project, project);
+    }
+
+    /// Clearing every keyframe of a parameter in one go leaves the parameter at the value of the
+    /// latest keyframe, exactly as deleting them one at a time (earliest first) does: the base
+    /// value a parameter had before it was animated does not come back.
+    #[test]
+    fn clearing_a_whole_lane_keeps_the_latest_keyframes_value_like_single_deletes() {
+        let (mut s, keys) = fixture();
+        let clip = keys[0]["clip"].as_u64().unwrap();
+        // scale: keyframes at 0.5 s and 1.0 s with values 40 and 80 over a base value of 100
+        for (key, value) in [(&keys[0], 40.0), (&keys[1], 80.0)] {
+            s.execute("effects.setKeyframe", json!({"clip":clip,"effect":"motion","param":"scale","mediaTime":key["time"],"value":value})).unwrap();
+        }
+        let param = |s: &Session| {
+            let it = s.active_sequence().unwrap().find_item(ClipId(clip)).unwrap().1;
+            it.effect("motion").unwrap().param("scale").unwrap().clone()
+        };
+        assert_eq!(param(&s).keyframes.len(), 2);
+        // one at a time, through the single-keyframe form
+        let one_by_one = s.project.clone();
+        for key in [&keys[0], &keys[1]] {
+            s.execute("effects.deleteKeyframe", json!({"clip":clip,"effect":"motion","param":"scale","mediaTime":key["time"]})).unwrap();
+        }
+        let single = param(&s);
+        assert!(single.keyframes.is_empty());
+        assert_eq!(single.value, ParamValue::Float(80.0), "single deletes end at the latest keyframe's value");
+        s.project = one_by_one;
+        s.bump();
+        // the whole lane at once, listed latest first to show the order of the list does not matter
+        s.execute("effects.deleteKeyframe", json!({"keyframes":[keys[1],keys[0]]})).unwrap();
+        let batch = param(&s);
+        assert!(batch.keyframes.is_empty());
+        assert_eq!(batch.value, single.value, "the batch ends where single deletes end");
     }
 
     #[test]
