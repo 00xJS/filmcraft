@@ -1755,7 +1755,11 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
                 if mode == 1 {
                     let end = v.scroll + vis;
                     let ns = (v.scroll + dx).clamp(0.0, (end - 0.05).max(0.0));
-                    v.pps = (bar.width() as f64 / (end - ns).max(0.05)).clamp(floor, MAX_PPS);
+                    let pps = (bar.width() as f64 / (end - ns).max(0.05)).clamp(floor, MAX_PPS);
+                    // at the floor the view can widen no further: the right edge stays where it
+                    // is and the left one stops, instead of the whole view sliding left
+                    let ns = (end - bar.width() as f64 / pps).max(0.0);
+                    v.pps = pps;
                     v.scroll = ns;
                     v.target_scroll = ns;
                 } else {
