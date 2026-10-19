@@ -234,6 +234,41 @@ fn save_switch_reset_rename_delete_and_restart() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
+/// #2421: panel changes made without Save Changes to this Workspace come back after a restart
+/// (the layout in use when the app closed is remembered per workspace); Reset to Saved Layout
+/// still returns to the saved layout, and another workspace's remembered layout is not applied.
+#[test]
+fn the_layout_in_use_at_close_comes_back_without_saving() {
+    let data = data_dir("remember");
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.workspace(), "Editing");
+    assert!(d.shows(PanelKind::Metadata));
+    d.ok("ui.panel.close", json!({"panel": "Metadata"}));
+    d.app().remember_layout();
+    assert_eq!(saved_file(&data)["last"]["name"], "Editing");
+    assert_eq!(saved_file(&data)["saved"], json!([]), "nothing was saved as a workspace");
+    drop(d);
+
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.workspace(), "Editing");
+    assert!(!d.shows(PanelKind::Metadata), "the layout in use at close comes back");
+    d.menu("window.workspace.reset", json!({}));
+    assert!(d.shows(PanelKind::Metadata), "Reset to Saved Layout returns to the saved layout");
+
+    // closed in Color: Color comes back as it was, Editing opens its saved layout
+    d.ok("ui.set", json!({"workspace": "Color"}));
+    assert!(d.shows(PanelKind::LumetriScopes));
+    d.ok("ui.panel.close", json!({"panel": "LumetriScopes"}));
+    d.app().remember_layout();
+    drop(d);
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.workspace(), "Color");
+    assert!(!d.shows(PanelKind::LumetriScopes));
+    d.ok("ui.set", json!({"workspace": "Editing"}));
+    assert!(d.shows(PanelKind::Metadata), "another workspace's remembered layout does not apply");
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 #[test]
 fn save_rename_and_delete_through_the_dialogs() {
     let data = data_dir("dialogs");
