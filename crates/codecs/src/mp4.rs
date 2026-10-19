@@ -1136,6 +1136,15 @@ mod tests {
     }
 }
 
+/// Samples of silence standing in for an audio packet that will not decode: its declared
+/// duration, but never more than one second at the stream's rate (#1984: no audio codec's packet
+/// is longer, and the duration comes from the file, so a corrupt `stts` must not size an
+/// allocation).
+fn concealment_len(declared: u64, sample_rate: u32) -> usize {
+    let cap = u64::from(sample_rate.clamp(8_000, 384_000));
+    declared.min(cap) as usize
+}
+
 #[cfg(test)]
 mod multi_audio_tests {
     use filmcraft_isobmff::{Brand, Mp4Writer, PcmConfig, SampleEntry, TrackConfig, WriteSample, WriterOptions};
@@ -1224,15 +1233,6 @@ mod he_aac_tests {
             assert!(buf.channels.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1.0), "media_time {media_time}");
         }
     }
-}
-
-/// Samples of silence standing in for an audio packet that will not decode: its declared
-/// duration, but never more than one second at the stream's rate (#1984: no audio codec's packet
-/// is longer, and the duration comes from the file, so a corrupt `stts` must not size an
-/// allocation).
-fn concealment_len(declared: u64, sample_rate: u32) -> usize {
-    let cap = u64::from(sample_rate.clamp(8_000, 384_000));
-    declared.min(cap) as usize
 }
 
 #[cfg(test)]
