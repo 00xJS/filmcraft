@@ -3142,9 +3142,6 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     app.auto.add("timeline.tracks", layout.content, "tracks");
 }
 
-/// #374: trimming an audio clip must cut its waveform off at the moving edge, not squeeze the whole
-/// waveform into the shorter clip: the preview draws from the item the trim will leave, which shows
-/// the same media at every timeline time it still covers.
 #[cfg(test)]
 mod zoom_floor_tests {
     use super::*;
@@ -3172,8 +3169,7 @@ mod zoom_floor_tests {
 
     #[test]
     fn zoom_out_stops_at_the_floor_and_zoom_in_at_the_ceiling() {
-        let mut v = crate::state::TimelineView::default();
-        v.target_pps = 10.0;
+        let mut v = crate::state::TimelineView { target_pps: 10.0, ..Default::default() };
         for _ in 0..40 {
             zoom_about(&mut v, 1.0 / 1.6, 0.0, 1000.0, 38.0);
         }
@@ -3186,6 +3182,9 @@ mod zoom_floor_tests {
     }
 }
 
+/// #374: trimming an audio clip must cut its waveform off at the moving edge, not squeeze the whole
+/// waveform into the shorter clip: the preview draws from the item the trim will leave, which shows
+/// the same media at every timeline time it still covers.
 #[cfg(test)]
 mod trim_preview_tests {
     use super::*;
