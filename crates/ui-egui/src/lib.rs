@@ -862,6 +862,17 @@ impl FilmcraftApp {
         }
     }
 
+    /// Drop the layout remembered for `workspace` (Reset to Saved Layout): the saved layout is the
+    /// one to reopen with until the app closes again.
+    pub fn forget_remembered_layout(&mut self, workspace: &str) -> Result<(), String> {
+        if !self.workspaces.last.as_ref().is_some_and(|l| l.name == workspace) {
+            return Ok(());
+        }
+        let mut next = self.workspaces.clone();
+        next.last = None;
+        self.set_workspaces(next)
+    }
+
     /// At launch, after the workspace in use came back: its remembered layout, when the one
     /// remembered belongs to it (a layout of another workspace, or one that does not read back,
     /// leaves the saved layout in place).
