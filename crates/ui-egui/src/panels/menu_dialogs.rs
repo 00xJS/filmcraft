@@ -211,7 +211,8 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
             }
             return Some(r);
         }
-        "file.exportSelectionProject" | "file.exportAle" if params.get("path").is_none() => {
+        // the native pickers are dialogs too: not from `engine.execute` (#1540)
+        "file.exportSelectionProject" | "file.exportAle" if params.get("path").is_none() && dialogs => {
             if let Err(e) = enabled(app, id) {
                 return Some(Err(e));
             }
@@ -231,7 +232,7 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
                 app.session.execute(&id, p).map_err(|e| e.to_string())
             }));
         }
-        "file.mediaPropertiesFile" if params.get("path").is_none() => {
+        "file.mediaPropertiesFile" if params.get("path").is_none() && dialogs => {
             let exts: Vec<&str> =
                 filmcraft_media::VIDEO_EXTENSIONS.iter().chain(filmcraft_media::AUDIO_EXTENSIONS).chain(filmcraft_media::STILL_EXTENSIONS).copied().collect();
             let id = id.to_string();
