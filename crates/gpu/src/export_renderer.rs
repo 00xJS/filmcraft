@@ -80,10 +80,14 @@ static DEVICE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Retire the shared export device, logging the first reason only and keeping it for
 /// [`disabled_reason`].
 fn mark_device_failed(why: &str) {
-    if !DEVICE_FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    // the reason is stored before the flag is raised, under the reason's own lock, so whoever
+    // sees the flag (an `ExportRenderer::new` on another thread) finds the reason with it
+    let mut slot = disabled_reason_slot().lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = Some(why.to_string());
         log::error!("GPU export disabled for this session ({why}); exports render on the CPU");
-        keep_reason(why);
     }
+    DEVICE_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn disabled_reason_slot() -> &'static std::sync::Mutex<Option<String>> {
