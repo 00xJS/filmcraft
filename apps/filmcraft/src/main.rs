@@ -256,7 +256,8 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }
         }
         let mut app = FilmcraftApp::new(session);
-        if home {
+        // Home only when nothing opened a project after all (`--recover` may have)
+        if home && app.session.path.is_none() {
             app.ui.mode = filmcraft_ui_egui::state::Mode::Import;
         }
         app.graphics_notice = notice;
