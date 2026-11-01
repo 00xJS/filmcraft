@@ -23,7 +23,8 @@ fn the_probe_runs_once_and_registers_the_format() {
     // `register` makes `available(Hevc)` follow the probe; registering again changes nothing. Another
     // registered HEVC encoder (Media Foundation on Windows) can make the format available on its
     // own, so with NVENC out that is what decides it rather than this probe.
-    assert!(!filmcraft_export::available(Format::Hevc) || first);
+    // Tests share this process, so another test may already have registered Media Foundation.
+    assert!(!filmcraft_export::available(Format::Hevc) || first || filmcraft_platform::media_foundation::encode::hevc_available());
     filmcraft_platform::register();
     filmcraft_platform::register();
     if first {
